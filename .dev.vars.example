@@ -1,0 +1,13 @@
+# Copy to .dev.vars for local development (never commit .dev.vars)
+
+# HS256 shared secret (use one of HS256 or RS256, not both)
+JWT_SECRET=your-hs256-secret-here
+
+# RS256 public key in PEM format (newlines as \n)
+# JWT_PUBLIC_KEY=-----BEGIN PUBLIC KEY-----\nMIIBIjAN...
+
+# Rate limit: requests per window per IP (default 60)
+RATE_LIMIT_MAX=60
+
+# Rate limit window in seconds (default 60)
+RATE_LIMIT_WINDOW=60
