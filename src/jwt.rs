@@ -47,6 +47,7 @@ pub fn validate(
 
     let mut validation = Validation::new(alg);
     validation.validate_exp = true;
+    validation.leeway = 0; // no grace period — edge security must be strict
 
     let data = decode::<Claims>(token, &key, &validation)
         .map_err(|e| JwtError::Invalid(e.to_string()))?;
@@ -99,5 +100,46 @@ mod tests {
     fn malformed_token_rejected() {
         let result = validate("not.a.jwt", Some("secret"), None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn expired_token_rejected() {
+        let token = make_hs256_token("secret", "user-2", -10);
+        let result = validate(&token, Some("secret"), None);
+        assert!(result.is_err(), "expired token must be rejected");
+    }
+
+    #[test]
+    fn claims_sub_is_preserved() {
+        let token = make_hs256_token("s", "alice@example.com", 3600);
+        let claims = validate(&token, Some("s"), None).unwrap();
+        assert_eq!(claims.sub, "alice@example.com");
+    }
+
+    #[test]
+    fn token_without_iat_accepted() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let claims = Claims { sub: "no-iat".to_string(), exp: now + 3600, iat: None };
+        let token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(b"key"),
+        )
+        .unwrap();
+        let result = validate(&token, Some("key"), None);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().sub, "no-iat");
+    }
+
+    #[test]
+    fn hs256_preferred_over_rs256_when_both_provided() {
+        let token = make_hs256_token("hs-secret", "user-3", 3600);
+        // When both keys are supplied, HS256 (secret) wins per the validate() contract
+        let result = validate(&token, Some("hs-secret"), Some("not-a-pem"));
+        assert!(result.is_ok(), "HS256 must be tried first when secret is present");
     }
 }
