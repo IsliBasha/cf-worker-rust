@@ -32,10 +32,7 @@ pub fn validate(
     public_key: Option<&str>,
 ) -> Result<Claims, JwtError> {
     let (key, alg) = match (secret, public_key) {
-        (Some(s), _) => (
-            DecodingKey::from_secret(s.as_bytes()),
-            Algorithm::HS256,
-        ),
+        (Some(s), _) => (DecodingKey::from_secret(s.as_bytes()), Algorithm::HS256),
         (None, Some(pem)) => {
             let pem_bytes = pem.replace("\\n", "\n");
             let key = DecodingKey::from_rsa_pem(pem_bytes.as_bytes())
@@ -49,8 +46,8 @@ pub fn validate(
     validation.validate_exp = true;
     validation.leeway = 0; // no grace period — edge security must be strict
 
-    let data = decode::<Claims>(token, &key, &validation)
-        .map_err(|e| JwtError::Invalid(e.to_string()))?;
+    let data =
+        decode::<Claims>(token, &key, &validation).map_err(|e| JwtError::Invalid(e.to_string()))?;
 
     Ok(data.claims)
 }
@@ -71,8 +68,17 @@ mod tests {
         } else {
             now.saturating_sub((-exp_offset) as u64)
         };
-        let claims = Claims { sub: sub.to_string(), exp, iat: Some(now) };
-        encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes())).unwrap()
+        let claims = Claims {
+            sub: sub.to_string(),
+            exp,
+            iat: Some(now),
+        };
+        encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -123,7 +129,11 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let claims = Claims { sub: "no-iat".to_string(), exp: now + 3600, iat: None };
+        let claims = Claims {
+            sub: "no-iat".to_string(),
+            exp: now + 3600,
+            iat: None,
+        };
         let token = encode(
             &Header::default(),
             &claims,
@@ -140,6 +150,9 @@ mod tests {
         let token = make_hs256_token("hs-secret", "user-3", 3600);
         // When both keys are supplied, HS256 (secret) wins per the validate() contract
         let result = validate(&token, Some("hs-secret"), Some("not-a-pem"));
-        assert!(result.is_ok(), "HS256 must be tried first when secret is present");
+        assert!(
+            result.is_ok(),
+            "HS256 must be tried first when secret is present"
+        );
     }
 }
