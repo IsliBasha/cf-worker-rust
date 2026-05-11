@@ -69,4 +69,11 @@ jobs:
       - name: Deploy (pre-built)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: wrangler deploy --no-bundle
+        run: |
+          python3 -c "
+          import re, pathlib
+          t = pathlib.Path('wrangler.toml').read_text()
+          t = re.sub(r'\[build\].*?(?=\n\[|\Z)', '', t, flags=re.DOTALL)
+          pathlib.Path('wrangler.toml').write_text(t)
+          "
+          wrangler deploy --no-bundle
