@@ -1,0 +1,114 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "Request Pipeline Tour",
+  "description": "Follow a real HTTP request from Cloudflare's edge all the way through rate limiting, JWT validation, and the response — covering every source file in the project.",
+  "ref": "main",
+  "steps": [
+    {
+      "file": "Cargo.toml",
+      "line": 7,
+      "title": "What kind of crate is this?",
+      "description": "`crate-type = [\"cdylib\"]` tells the Rust compiler to produce a C-compatible dynamic library instead of a normal binary. Cloudflare compiles that output to WebAssembly (WASM) so it can run on their global edge network — not on a server you manage. Every request is handled in this tiny WASM sandbox."
+    },
+    {
+      "file": "Cargo.toml",
+      "line": 10,
+      "title": "The workers-rs crate",
+      "description": "The `worker` crate is Cloudflare's official Rust SDK. It gives us `Request`, `Response`, `Env`, `KvStore`, and the `#[event(fetch)]` macro that wires our function to the incoming HTTP fetch event. Think of it as the Rust equivalent of a `addEventListener('fetch', ...)` in a JavaScript worker."
+    },
+    {
+      "file": "wrangler.toml",
+      "line": 1,
+      "title": "Project config and secrets",
+      "description": "`wrangler.toml` is the project manifest — it names the worker, sets the compatibility date (controls which Cloudflare APIs are available), and declares KV namespace bindings and environment variables. Secrets like `JWT_SECRET` never go here; they live in `.dev.vars` locally and are set with `wrangler secret put` in production."
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 6,
+      "title": "Entry point — the fetch handler",
+      "description": "`#[event(fetch)]` is the magic attribute that turns this async function into the worker's request handler. Every HTTP request that hits `cf-worker-rust.islibasha1.workers.dev` calls `fetch(req, env, ctx)`. The `env` parameter gives access to KV stores and secrets. The `ctx` parameter allows background tasks — we don't use it here."
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 8,
+      "title": "Step 1 — health check shortcut",
+      "description": "Before doing any expensive work, the handler checks if the path is `/health` and returns `200 OK` immediately. This pattern is called a guard or early return. It lets load balancers and monitoring tools confirm the worker is alive without touching rate limits or JWT keys."
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 12,
+      "title": "Step 2 — read the client IP",
+      "description": "`CF-Connecting-IP` is a header Cloudflare injects on every request. It contains the real visitor IP even if the request came through a proxy. We use it as the rate limit key so each IP gets its own counter. If the header is missing (e.g. in unit tests), we fall back to the string `\"unknown\"` and rate-limit everything under that single bucket."
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 18,
+      "title": "Step 3 — per-IP rate limiting",
+      "description": "We look up the `RATE_LIMIT` KV namespace from `env`, read the configured limits from env vars, then call `rate_limit::check`. If the call returns `Ok(false)` the IP has exceeded the limit and we return `429 Too Many Requests`. If KV itself errors (network hiccup, cold start) we **fail open** — the request is allowed through. Blocking all traffic because of an infra blip is worse than letting a few extra requests through."
+    },
+    {
+      "file": "src/rate_limit.rs",
+      "line": 1,
+      "title": "Inside rate_limit::check",
+      "description": "The counter lives in Cloudflare KV under the key `rl:<ip>`. We read the current count, check it against `max_requests`, and if allowed we increment and re-write with a TTL equal to `window_secs`. After the window expires the key disappears and the counter resets automatically. No cron job, no cleanup — KV TTL handles it."
+    },
+    {
+      "file": "src/rate_limit.rs",
+      "line": 20,
+      "title": "Why >= and not >?",
+      "description": "The check is `current >= max_requests` rather than `>`. This means the *n*th request is the last allowed one — the counter increments to exactly `max_requests` and the next request sees `current == max_requests` and is rejected. Using `>` would allow one extra request. A subtle off-by-one that matters in strict rate limiting."
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 43,
+      "title": "Step 4 — extract the Bearer token",
+      "description": "JWT tokens are sent as `Authorization: Bearer <token>`. `extract_bearer` reads that header and delegates to the pure function `parse_bearer`. Splitting pure logic from the worker runtime makes it easy to unit test — no need to simulate headers or the workers SDK."
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 69,
+      "title": "parse_bearer — pure and testable",
+      "description": "`parse_bearer` takes an `Option<String>` and returns `Option<String>`. It uses `.strip_prefix(\"Bearer \")` (note the space) to extract the token. The case is intentionally strict — `\"bearer \"` (lowercase) returns `None`. This is correct: accepting case variations opens the door to subtle bypass bugs."
+    },
+    {
+      "file": "src/jwt.rs",
+      "line": 29,
+      "title": "Step 5 — JWT validation",
+      "description": "`jwt::validate` supports two algorithms: HS256 (symmetric, shared secret) and RS256 (asymmetric, RSA public key). Which one is used depends purely on which secret is provided in `env`. If `JWT_SECRET` is set, HS256 is used. If only `JWT_PUBLIC_KEY` is set, RS256 is used. If neither is set, the function returns `JwtError::MissingKey` and the request gets a 401 immediately."
+    },
+    {
+      "file": "src/jwt.rs",
+      "line": 45,
+      "title": "Zero leeway — edge security",
+      "description": "`validation.leeway = 0` is a deliberate security decision. The `jsonwebtoken` crate defaults to a 60-second grace period, meaning tokens expired up to 60 seconds ago are still accepted. On an edge worker handling auth tokens, that's unacceptable — an attacker who steals a just-expired token gets a free 60-second window. Setting leeway to zero means expiry is absolute."
+    },
+    {
+      "file": "src/jwt.rs",
+      "line": 4,
+      "title": "The Claims struct",
+      "description": "`Claims` is the payload decoded from the JWT. `sub` is the subject — typically a user ID or email. `exp` is the Unix timestamp expiry. `iat` (issued-at) is optional and skipped when serializing if absent. The `#[derive(Serialize, Deserialize)]` macros auto-generate the JSON encoding/decoding code."
+    },
+    {
+      "file": "src/lib.rs",
+      "line": 51,
+      "title": "Step 6 — build the response",
+      "description": "On a valid JWT, `claims.sub` (the user identifier) is included in the JSON response body: `{\"ok\": true, \"sub\": \"...\"}`. On failure, the error is logged via `console_error!` (visible in `wrangler tail` in production) but the client only sees `401 Unauthorized` — never the internal error detail."
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 11,
+      "title": "CI — test job",
+      "description": "Every push and PR runs: `cargo fmt --check` (formatting), `cargo clippy -- -D warnings` (lints as errors), and `cargo test` (all unit tests). The `Swatinem/rust-cache@v2` action caches the compiled dependencies so subsequent runs take seconds rather than minutes."
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 36,
+      "title": "CI — deploy job",
+      "description": "The deploy job only runs on pushes to `main`. It installs Rust with the `wasm32-unknown-unknown` target, installs `worker-build` (the Cloudflare WASM build tool) and `clang` (required by the `ring` crypto crate for WASM compilation), then runs `wrangler deploy`. The `CLOUDFLARE_API_TOKEN` secret is set in GitHub repository settings and never appears in the code."
+    },
+    {
+      "title": "You're done",
+      "description": "You've traced a request end to end: Cloudflare edge → `fetch` handler → `/health` shortcut → IP extraction → rate limit check in KV → Bearer token extraction → JWT validation → JSON response. The three source files (`lib.rs`, `rate_limit.rs`, `jwt.rs`) each own exactly one concern. Any new feature belongs in one of those three, or in a new module alongside them."
+    }
+  ]
+}
