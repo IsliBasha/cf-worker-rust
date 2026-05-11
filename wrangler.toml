@@ -12,7 +12,9 @@ id = "15d3c2eda05a41ceafe22519c249e18b"
 preview_id = "27ef3c34d8d54a28b54b94f0d736ee8a"
 
 [vars]
-ENVIRONMENT = "development"
+ENVIRONMENT = "production"
+RATE_LIMIT_MAX = "60"
+RATE_LIMIT_WINDOW = "60"
 
 # JWT_SECRET and JWT_PUBLIC_KEY go in .dev.vars (local) or
 # Cloudflare dashboard / wrangler secret put (production)
